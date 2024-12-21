@@ -9,4 +9,8 @@ require (
 	golang.org/x/oauth2 v0.24.0
 )
 
-require cloud.google.com/go/compute/metadata v0.3.0 // indirect
+require (
+	cloud.google.com/go/compute/metadata v0.3.0 // indirect
+	github.com/ajg/form v1.5.1 // indirect
+	github.com/go-chi/render v1.0.3 // indirect
+)
