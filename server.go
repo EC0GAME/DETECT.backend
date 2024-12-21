@@ -7,11 +7,12 @@ import (
 	"net/http"
 	"os/exec"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
+	"github.com/go-chi/render"
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
-	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
 )
 
 // OAuth
@@ -29,7 +30,7 @@ func GoogleLoginHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func GoogleCallbackHandler(w http.ResponseWriter, r *http.Request) {
-	w.Write([]byte("Google OAuth Callback"))
+	render.JSON(w, r, map[string]string{"message": "Google OAuth Callback"})
 }
 
 // Python Script
@@ -37,10 +38,10 @@ func RunPythonHandler(w http.ResponseWriter, r *http.Request) {
 	cmd := exec.Command("python3", "main.py")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Error running Python script: %v\nOutput: %s", err, output), http.StatusInternalServerError)
+		render.JSON(w, r, map[string]string{"error": fmt.Sprintf("Error running Python script: %v\nOutput: %s", err, output)})
 		return
 	}
-	w.Write(output)
+	render.JSON(w, r, map[string]string{"output": string(output)})
 }
 
 // Bcrypt
@@ -49,17 +50,17 @@ func HashPasswordHandler(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		http.Error(w, "Invalid request payload", http.StatusBadRequest)
+		render.JSON(w, r, map[string]string{"error": "Invalid request payload"})
 		return
 	}
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(request.Password), bcrypt.DefaultCost)
 	if err != nil {
-		http.Error(w, "Failed to hash password", http.StatusInternalServerError)
+		render.JSON(w, r, map[string]string{"error": "Failed to hash password"})
 		return
 	}
 
-	w.Write([]byte(fmt.Sprintf("Hashed Password: %s", hash)))
+	render.JSON(w, r, map[string]string{"hashed_password": string(hash)})
 }
 
 func ComparePasswordHandler(w http.ResponseWriter, r *http.Request) {
@@ -68,17 +69,32 @@ func ComparePasswordHandler(w http.ResponseWriter, r *http.Request) {
 		Hash     string `json:"hash"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		http.Error(w, "Invalid request payload", http.StatusBadRequest)
+		render.JSON(w, r, map[string]string{"error": "Invalid request payload"})
 		return
 	}
 
 	err := bcrypt.CompareHashAndPassword([]byte(request.Hash), []byte(request.Password))
 	if err != nil {
-		w.WriteHeader(http.StatusUnauthorized)
-		w.Write([]byte("Password does not match"))
+		render.JSON(w, r, map[string]string{"message": "Password does not match"})
 	} else {
-		w.Write([]byte("Password matches"))
+		render.JSON(w, r, map[string]string{"message": "Password matches"})
 	}
+}
+
+var request struct {
+	Email    string `json:"email"`
+	Username string `json:"name"`
+	Password string `json:"password"`
+}
+
+func RegisterHandler(w http.ResponseWriter, r *http.Request) {
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		render.JSON(w, r, map[string]string{"error": "Invalid request payload"})
+		return
+	}
+
+	fmt.Printf("Email: %s, Username: %s, Password: %s\n", request.Email, request.Username, request.Password)
+	render.JSON(w, r, request)
 }
 
 // Main
@@ -92,7 +108,7 @@ func main() {
 
 	// Routes
 	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("Welcome to the DETECT Go API Server!"))
+		render.JSON(w, r, map[string]string{"message": "Welcome to the DETECT Go API Server!"})
 	})
 
 	// OAuth Routes
@@ -105,6 +121,9 @@ func main() {
 	// Bcrypt Routes
 	r.Post("/hash-password", HashPasswordHandler)
 	r.Post("/compare-password", ComparePasswordHandler)
+
+	// Registration Route
+	r.Post("/register", RegisterHandler)
 
 	// Start the server
 	log.Println("Starting server on http://localhost:8080")
