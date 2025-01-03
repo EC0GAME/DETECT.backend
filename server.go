@@ -1,112 +1,85 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
-	"os/exec"
 
-	"golang.org/x/crypto/bcrypt"
-	"golang.org/x/oauth2"
-	"golang.org/x/oauth2/google"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	_ "github.com/mattn/go-sqlite3"
 )
 
-// OAuth
-var googleOauthConfig = &oauth2.Config{
-	ClientID:     "nothing",         // Replace with actual ID
-	ClientSecret: "to see here",     // Replace with actual Secret
-	RedirectURL:  "http://localhost:8080/auth/google/callback",
-	Scopes:       []string{"https://www.googleapis.com/auth/userinfo.email"},
-	Endpoint:     google.Endpoint,
-}
+var db *sql.DB
 
-func GoogleLoginHandler(w http.ResponseWriter, r *http.Request) {
-	url := googleOauthConfig.AuthCodeURL("state-token", oauth2.AccessTypeOffline)
-	http.Redirect(w, r, url, http.StatusTemporaryRedirect)
-}
-
-func GoogleCallbackHandler(w http.ResponseWriter, r *http.Request) {
-	w.Write([]byte("Google OAuth Callback"))
-}
-
-// Python Script
-func RunPythonHandler(w http.ResponseWriter, r *http.Request) {
-	cmd := exec.Command("python3", "main.py")
-	output, err := cmd.CombinedOutput()
+func initDatabase() {
+	var err error
+	db, err = sql.Open("sqlite3", "./example.db")
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Error running Python script: %v\nOutput: %s", err, output), http.StatusInternalServerError)
-		return
+		log.Fatalf("Failed to connect to the database: %v", err)
 	}
-	w.Write(output)
+	if err := db.Ping(); err != nil {
+		log.Fatalf("Failed to ping the database: %v", err)
+	}
+
+	// Create tables if they don't exist
+	createTableQuery := `
+	CREATE TABLE IF NOT EXISTS users (
+		user_id INTEGER PRIMARY KEY AUTOINCREMENT,
+		email TEXT NOT NULL UNIQUE,
+		password_hash TEXT,
+		oauth_provider TEXT,
+		oauth_token TEXT,
+		username TEXT UNIQUE,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);`
+	_, err = db.Exec(createTableQuery)
+	if err != nil {
+		log.Fatalf("Failed to create users table: %v", err)
+	}
+
+	log.Println("Database initialized and users table ensured!")
 }
 
-// Bcrypt
-func HashPasswordHandler(w http.ResponseWriter, r *http.Request) {
+
+func AddUserHandler(w http.ResponseWriter, r *http.Request) {
 	var request struct {
-		Password string `json:"password"`
+		Email        string `json:"email"`
+		PasswordHash string `json:"password_hash"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		http.Error(w, "Invalid request payload", http.StatusBadRequest)
 		return
 	}
 
-	hash, err := bcrypt.GenerateFromPassword([]byte(request.Password), bcrypt.DefaultCost)
+	// Use email as username
+	query := `INSERT INTO users (email, password_hash, username) VALUES (?, ?, ?)`
+	_, err := db.Exec(query, request.Email, request.PasswordHash, request.Email)
 	if err != nil {
-		http.Error(w, "Failed to hash password", http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("Failed to insert user: %v", err), http.StatusInternalServerError)
 		return
 	}
 
-	w.Write([]byte(fmt.Sprintf("Hashed Password: %s", hash)))
+	w.Write([]byte("User added successfully"))
 }
 
-func ComparePasswordHandler(w http.ResponseWriter, r *http.Request) {
-	var request struct {
-		Password string `json:"password"`
-		Hash     string `json:"hash"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		http.Error(w, "Invalid request payload", http.StatusBadRequest)
-		return
-	}
-
-	err := bcrypt.CompareHashAndPassword([]byte(request.Hash), []byte(request.Password))
-	if err != nil {
-		w.WriteHeader(http.StatusUnauthorized)
-		w.Write([]byte("Password does not match"))
-	} else {
-		w.Write([]byte("Password matches"))
-	}
-}
-
-// Main
 func main() {
-	// Initialize the router
-	r := chi.NewRouter()
+	initDatabase()
+	defer db.Close()
 
-	// Add middleware
+	r := chi.NewRouter()
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 
-	// Routes
 	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("Welcome to the DETECT Go API Server!"))
+		w.Write([]byte("Welcome to the DETECT Go API Server with SQLite!"))
 	})
 
-	// OAuth Routes
-	r.Get("/auth/google/login", GoogleLoginHandler)
-	r.Get("/auth/google/callback", GoogleCallbackHandler)
+	// Route to add a user
+	r.Post("/add-user", AddUserHandler)
 
-	// Python Script Execution Route
-	r.Get("/run-python", RunPythonHandler)
-
-	// Bcrypt Routes
-	r.Post("/hash-password", HashPasswordHandler)
-	r.Post("/compare-password", ComparePasswordHandler)
-
-	// Start the server
 	log.Println("Starting server on http://localhost:8080")
 	if err := http.ListenAndServe(":8080", r); err != nil {
 		log.Fatalf("Server failed to start: %v", err)
